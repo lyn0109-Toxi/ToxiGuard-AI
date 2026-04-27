@@ -1,5 +1,9 @@
+import csv
 import base64
+import json
 from pathlib import Path
+from urllib.parse import quote, quote_plus
+from urllib.request import urlopen
 
 import streamlit as st
 
@@ -136,11 +140,41 @@ KNOWN_IMPURITY_REFERENCES = {
 }
 
 
+def load_reference_database():
+    database_path = Path(__file__).with_name("impurity_reference_database.csv")
+    references = {}
+    if not database_path.exists():
+        return references
+
+    with database_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            api_name = row.get("api_name", "").strip().lower()
+            if not api_name:
+                continue
+            references.setdefault(api_name, []).append(
+                {
+                    "Reference Impurity": row.get("reference_impurity", "").strip(),
+                    "Impurity Chemical Name": row.get("impurity_chemical_name", "").strip(),
+                    "Likely Origin": row.get("likely_origin", "").strip(),
+                    "Why It Matters": row.get("why_it_matters", "").strip(),
+                    "Control Strategy": row.get("control_strategy", "").strip(),
+                    "Reference Basis": row.get("reference_basis", "").strip(),
+                }
+            )
+    return references
+
+
+CSV_IMPURITY_REFERENCES = load_reference_database()
+
+
 def get_impurity_references(compound_name):
     compound = compound_name.strip()
     key = compound.lower()
     if not compound:
         return []
+    if key in CSV_IMPURITY_REFERENCES:
+        return CSV_IMPURITY_REFERENCES[key]
     if key in KNOWN_IMPURITY_REFERENCES:
         return KNOWN_IMPURITY_REFERENCES[key]
 
@@ -154,6 +188,111 @@ def get_impurity_references(compound_name):
             "Reference Basis": "No verified entry loaded in demo library; user should confirm for the searched compound",
         }
     ]
+
+
+def make_reference_search_links(compound_name):
+    compound = compound_name.strip()
+    if not compound:
+        return []
+
+    usp_query = quote_plus(
+        f'site:doi.usp.org/USPNF "{compound}" "Related Compound" OR impurity'
+    )
+    usp_rs_query = quote_plus(
+        f'site:usp.org/reference-standards "{compound}" "Related Compound"'
+    )
+    ep_query = quote_plus(
+        f'site:edqm.eu OR site:crs.edqm.eu "{compound}" impurity CRS'
+    )
+    pubchem_query = quote_plus(f"{compound} impurity related compound")
+    pubmed_query = quote_plus(f"{compound} impurity degradation product")
+    google_patent_query = quote_plus(f"{compound} impurity process degradation product")
+
+    return [
+        {
+            "Search Target": "USP-NF / USP monograph public search",
+            "Purpose": "Check compendial related substances and official impurity references",
+            "Link": f"https://www.google.com/search?q={usp_query}",
+        },
+        {
+            "Search Target": "USP Reference Standards",
+            "Purpose": "Find USP RS / related compound reference standards",
+            "Link": f"https://www.google.com/search?q={usp_rs_query}",
+        },
+        {
+            "Search Target": "EP / EDQM CRS",
+            "Purpose": "Check European Pharmacopoeia CRS and impurity reference standards",
+            "Link": f"https://www.google.com/search?q={ep_query}",
+        },
+        {
+            "Search Target": "PubChem",
+            "Purpose": "Check chemical identity, synonyms, and possible structures",
+            "Link": f"https://pubchem.ncbi.nlm.nih.gov/#query={pubchem_query}",
+        },
+        {
+            "Search Target": "PubMed / literature",
+            "Purpose": "Search degradation, forced degradation, and impurity literature",
+            "Link": f"https://pubmed.ncbi.nlm.nih.gov/?term={pubmed_query}",
+        },
+        {
+            "Search Target": "General process impurity search",
+            "Purpose": "Find public process/degradation impurity discussions",
+            "Link": f"https://www.google.com/search?q={google_patent_query}",
+        },
+    ]
+
+
+def fetch_pubchem_identity(compound_name):
+    compound = compound_name.strip()
+    if not compound:
+        return "Not searched"
+
+    url = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
+        f"{quote(compound)}/property/MolecularFormula,MolecularWeight,CanonicalSMILES/JSON"
+    )
+    try:
+        with urlopen(url, timeout=4) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        props = data["PropertyTable"]["Properties"][0]
+        formula = props.get("MolecularFormula", "N/A")
+        mw = props.get("MolecularWeight", "N/A")
+        smiles = props.get("CanonicalSMILES", "N/A")
+        return f"Found: formula {formula}, MW {mw}, canonical SMILES {smiles}"
+    except Exception:
+        return "Not automatically confirmed; use PubChem link for manual verification"
+
+
+def build_reference_search_report(compound_name):
+    compound = compound_name.strip()
+    if not compound:
+        return []
+
+    pubchem_status = fetch_pubchem_identity(compound)
+    rows = []
+    for item in make_reference_search_links(compound):
+        status = "Manual verification required"
+        expected_output = "Relevant reference documents or candidate impurity names"
+        if item["Search Target"] == "PubChem":
+            status = pubchem_status
+            expected_output = "Chemical identity, synonyms, formula, molecular weight, structure"
+        elif "USP" in item["Search Target"]:
+            expected_output = "USP monograph, USP RS, related compound names, acceptance criteria if public"
+        elif "EP" in item["Search Target"] or "EDQM" in item["Search Target"]:
+            expected_output = "EP CRS / impurity reference standard candidates"
+        elif "PubMed" in item["Search Target"]:
+            expected_output = "Forced degradation, stability, degradation pathway, impurity literature"
+
+        rows.append(
+            {
+                "Search Target": item["Search Target"],
+                "Search Purpose": item["Purpose"],
+                "Expected Output": expected_output,
+                "Search Status": status,
+                "Search Link": item["Link"],
+            }
+        )
+    return rows
 
 
 st.markdown(
@@ -460,6 +599,8 @@ compound = st.text_input("Compound Name", key="compound_name")
 smiles = st.text_input("SMILES", key="smiles")
 
 reference_rows = get_impurity_references(compound)
+search_links = make_reference_search_links(compound)
+search_report_rows = build_reference_search_report(compound)
 if compound.strip():
     st.markdown(f"### Known Impurity Reference for {compound.strip()}")
     st.caption(
@@ -468,6 +609,22 @@ if compound.strip():
         "If no verified entry is loaded, the table shows a search/verification plan."
     )
     st.table(reference_rows)
+    st.markdown("### External Reference Search Links")
+    st.caption(
+        "These links do not replace USP/EP verification. They are shortcuts to help find "
+        "official monographs, reference standards, chemical identity, and literature."
+    )
+    for item in search_links:
+        st.markdown(
+            f"- [{item['Search Target']}]({item['Link']}) - {item['Purpose']}"
+        )
+    st.markdown("### Reference Search Report")
+    st.caption(
+        "The app prepares a structured search report for the entered compound. "
+        "PubChem identity is checked automatically when network access is available; "
+        "USP/EP sources still require manual verification."
+    )
+    st.table(search_report_rows)
 else:
     st.info("Enter a compound name to check compound-specific impurity reference information.")
 
@@ -542,6 +699,19 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
         "DMF data, validated analytical methods, forced degradation studies, and peer-reviewed "
         "literature should support the compendial reference, not replace it."
     )
+    if search_links:
+        st.markdown("#### External Reference Search Links")
+        for item in search_links:
+            st.markdown(
+                f"- [{item['Search Target']}]({item['Link']}) - {item['Purpose']}"
+            )
+    if search_report_rows:
+        st.markdown("#### Automated Reference Search Report")
+        st.caption(
+            "This section records all reference searches prepared for the entered compound. "
+            "USP/EP results must be verified from the official source before regulatory use."
+        )
+        st.table(search_report_rows)
 
     impurity_rows = assess_impurities(impurity_input)
     if impurity_rows:
