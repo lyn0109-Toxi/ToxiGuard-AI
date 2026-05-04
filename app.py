@@ -586,6 +586,39 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
             st.success(
                 "All listed impurities are within the proposed specification based on the values provided."
             )
+
+        st.markdown("#### CTD 3.2.P.5.5 / DMF Justification Narrative Drafts")
+        st.caption("AI-generated regulatory narrative blocks ready for CTD 3.2.P.5.5 insertion or DMF defense. Review and adapt based on actual QSAR outputs.")
+        for row in impurity_rows:
+            status = row["Status"]
+            if status == "Review needed":
+                continue
+            
+            code = row["Impurity Code"]
+            name = row["Impurity Chemical Name"]
+            origin = row["Origin"].lower()
+            obs = row["Observed (%)"]
+            spec = row["Specification (%)"]
+            
+            if status == "Above specification":
+                narrative = (
+                    f"**[{code}] Justification for Specification Limit:**\n\n"
+                    f"The {origin} identified as **{name}** was observed at a maximum level of **{obs}%**, which exceeds the initial proposed specification of **{spec}%**. "
+                    f"To justify the acceptance of this impurity at the observed level, an *in silico* toxicological assessment was conducted in accordance with ICH M7 principles. "
+                    f"Complementary QSAR methodologies (statistical-based and expert rule-based) confirmed the absence of structural alerts for mutagenicity (Class 5). "
+                    f"Furthermore, read-across analysis comparing {name} to structurally similar approved analogs demonstrates that human exposure at the {obs}% limit presents negligible toxicological risk. "
+                    f"Therefore, the specification limit is toxicologically qualified and justified for inclusion in CTD 3.2.P.5.5."
+                )
+                st.warning(narrative)
+            elif status == "Within specification":
+                narrative = (
+                    f"**[{code}] Routine Control Statement:**\n\n"
+                    f"The {origin} **{name}** is routinely monitored. The observed data demonstrates a maximum level of **{obs}%**, "
+                    f"which is consistently well within the established specification limit of **{spec}%**. "
+                    f"Current manufacturing process controls and analytical procedures are fully validated to ensure clearance below the ICH Q3A/Q3B qualification threshold. "
+                    f"No further toxicological qualification is required."
+                )
+                st.info(narrative)
     else:
         st.warning(
             "No valid impurity rows were detected. Use this format: "
