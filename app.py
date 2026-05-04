@@ -617,7 +617,7 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
                 return 'background-color: #e8f5e9; color: #1b5e20; font-weight: bold'
             return ''
         
-        styled_df = df_impurities.style.applymap(highlight_status, subset=['Status'])
+        styled_df = df_impurities.style.map(highlight_status, subset=['Status'])
         st.dataframe(styled_df, use_container_width=True)
 
         above_spec = [row for row in impurity_rows if row["Status"] == "Above specification"]
