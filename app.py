@@ -1,9 +1,5 @@
-import csv
 import base64
-import json
 from pathlib import Path
-from urllib.parse import quote, quote_plus
-from urllib.request import urlopen
 
 import streamlit as st
 
@@ -44,11 +40,11 @@ def assess_impurities(raw_text):
             continue
 
         parts = [part.strip() for part in line.split(",")]
-        if len(parts) < 6:
+        if len(parts) < 5:
             continue
 
-        code, trade_name, chemical_name, origin, observed_text, limit_text = parts[:6]
-        concern = parts[6] if len(parts) > 6 else "Not specified"
+        code, chemical_name, origin, observed_text, limit_text = parts[:5]
+        concern = parts[5] if len(parts) > 5 else "Not specified"
         observed = to_float(observed_text)
         limit = to_float(limit_text)
         origin_note = origin_actions.get(
@@ -72,7 +68,6 @@ def assess_impurities(raw_text):
         rows.append(
             {
                 "Impurity Code": code,
-                "Impurity Trade / Reference Name": trade_name,
                 "Impurity Chemical Name": chemical_name,
                 "Origin": origin,
                 "Observed (%)": observed_text,
@@ -89,7 +84,6 @@ KNOWN_IMPURITY_REFERENCES = {
     "acetaminophen": [
         {
             "Reference Impurity": "p-Aminophenol / 4-Aminophenol",
-            "Impurity Trade / Reference Name": "USP 4-Aminophenol RS",
             "Impurity Chemical Name": "4-Aminophenol",
             "Likely Origin": "Raw material or degradation product",
             "Why It Matters": "Potential carryover from synthesis and known degradation-related concern",
@@ -98,7 +92,6 @@ KNOWN_IMPURITY_REFERENCES = {
         },
         {
             "Reference Impurity": "4-Nitrophenol",
-            "Impurity Trade / Reference Name": "4-Nitrophenol reference standard",
             "Impurity Chemical Name": "4-Nitrophenol",
             "Likely Origin": "Raw material or synthetic intermediate",
             "Why It Matters": "May indicate upstream material carryover or incomplete process clearance",
@@ -107,7 +100,6 @@ KNOWN_IMPURITY_REFERENCES = {
         },
         {
             "Reference Impurity": "Acetanilide-related impurity",
-            "Impurity Trade / Reference Name": "Acetaminophen related compound / route-specific reference",
             "Impurity Chemical Name": "Acetanilide or route-specific acetanilide analog",
             "Likely Origin": "Process impurity",
             "Why It Matters": "Can be associated with process route or side reaction profile",
@@ -118,7 +110,6 @@ KNOWN_IMPURITY_REFERENCES = {
     "telmisartan": [
         {
             "Reference Impurity": "Telmisartan related substance / process-related analog",
-            "Impurity Trade / Reference Name": "Telmisartan related compound / EP- or USP-listed reference",
             "Impurity Chemical Name": "Route-specific telmisartan related compound",
             "Likely Origin": "Process impurity",
             "Why It Matters": "May arise from coupling, cyclization, or side reaction depending on route",
@@ -127,7 +118,6 @@ KNOWN_IMPURITY_REFERENCES = {
         },
         {
             "Reference Impurity": "Residual starting material or intermediate",
-            "Impurity Trade / Reference Name": "Route-specific intermediate reference standard",
             "Impurity Chemical Name": "Route-specific starting material or intermediate",
             "Likely Origin": "Unreacted starting material",
             "Why It Matters": "Indicates incomplete conversion or insufficient purge during manufacturing",
@@ -136,7 +126,6 @@ KNOWN_IMPURITY_REFERENCES = {
         },
         {
             "Reference Impurity": "Oxidative or stress degradation product",
-            "Impurity Trade / Reference Name": "Stress degradation product reference",
             "Impurity Chemical Name": "Route-specific oxidative degradation product",
             "Likely Origin": "Degradation product",
             "Why It Matters": "May appear during forced degradation or long-term stability",
@@ -147,251 +136,24 @@ KNOWN_IMPURITY_REFERENCES = {
 }
 
 
-def load_reference_database():
-    database_path = Path(__file__).with_name("impurity_reference_database.csv")
-    references = {}
-    if not database_path.exists():
-        return references
-
-    with database_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            api_name = row.get("api_name", "").strip().lower()
-            if not api_name:
-                continue
-            references.setdefault(api_name, []).append(
-                {
-                    "Record Type": row.get("record_type", "Verification task").strip(),
-                    "Verification Status": row.get(
-                        "verification_status",
-                        "USP/EP confirmation required",
-                    ).strip(),
-                    "Reference Impurity": row.get("reference_impurity", "").strip(),
-                    "Impurity Trade / Reference Name": row.get(
-                        "impurity_trade_name",
-                        row.get("reference_impurity", ""),
-                    ).strip(),
-                    "Impurity Chemical Name": row.get("impurity_chemical_name", "").strip(),
-                    "Likely Origin": row.get("likely_origin", "").strip(),
-                    "Why It Matters": row.get("why_it_matters", "").strip(),
-                    "Control Strategy": row.get("control_strategy", "").strip(),
-                    "Reference Basis": row.get("reference_basis", "").strip(),
-                }
-            )
-    return references
-
-
-CSV_IMPURITY_REFERENCES = load_reference_database()
-
-
 def get_impurity_references(compound_name):
     compound = compound_name.strip()
     key = compound.lower()
     if not compound:
         return []
-    if key in CSV_IMPURITY_REFERENCES:
-        return CSV_IMPURITY_REFERENCES[key]
     if key in KNOWN_IMPURITY_REFERENCES:
         return KNOWN_IMPURITY_REFERENCES[key]
 
     return [
         {
-            "Record Type": "Verification task",
-            "Verification Status": "No confirmed impurity name loaded",
-            "Reference Impurity": "Compound-specific related-substance verification required",
-            "Impurity Trade / Reference Name": "To be confirmed from USP/EP, EDQM/USP RS, or validated method",
-            "Impurity Chemical Name": "To be confirmed from official monograph, reference standard, LC-MS, or validated method",
-            "Likely Origin": "Potential process impurity, degradation product, raw material carryover, or unknown impurity; exact identity not confirmed",
-            "Why It Matters": "This row is a verification task, not a confirmed impurity name. Compound-specific impurity profiles should be verified from authoritative references before regulatory use.",
-            "Control Strategy": "Search USP/EP monograph first; confirm with official RS/CRS, DMF, validated method, forced degradation, and literature.",
-            "Reference Basis": "No verified entry loaded in demo library for the searched compound.",
+            "Reference Impurity": f"{compound} related substances",
+            "Impurity Chemical Name": "To be confirmed from USP/EP or validated method",
+            "Likely Origin": "To be confirmed",
+            "Why It Matters": "Compound-specific impurity profile should be verified from authoritative references",
+            "Control Strategy": "Search USP/EP monograph first; if unavailable, use DMF, validated method, forced degradation, and literature",
+            "Reference Basis": "No verified entry loaded in demo library; user should confirm for the searched compound",
         }
     ]
-
-
-def make_reference_search_links(compound_name):
-    compound = compound_name.strip()
-    if not compound:
-        return []
-
-    usp_query = quote_plus(
-        f'site:doi.usp.org/USPNF "{compound}" "Related Compound" OR impurity'
-    )
-    usp_rs_query = quote_plus(
-        f'site:usp.org/reference-standards "{compound}" "Related Compound"'
-    )
-    ep_query = quote_plus(
-        f'site:edqm.eu OR site:crs.edqm.eu "{compound}" impurity CRS'
-    )
-    pubchem_query = quote_plus(f"{compound} impurity related compound")
-    pubmed_query = quote_plus(f"{compound} impurity degradation product")
-    google_patent_query = quote_plus(f"{compound} impurity process degradation product")
-
-    return [
-        {
-            "Search Target": "USP-NF / USP monograph public search",
-            "Purpose": "Check compendial related substances and official impurity references",
-            "Link": f"https://www.google.com/search?q={usp_query}",
-        },
-        {
-            "Search Target": "USP Reference Standards",
-            "Purpose": "Find USP RS / related compound reference standards",
-            "Link": f"https://www.google.com/search?q={usp_rs_query}",
-        },
-        {
-            "Search Target": "EP / EDQM CRS",
-            "Purpose": "Check European Pharmacopoeia CRS and impurity reference standards",
-            "Link": f"https://www.google.com/search?q={ep_query}",
-        },
-        {
-            "Search Target": "PubChem",
-            "Purpose": "Check chemical identity, synonyms, and possible structures",
-            "Link": f"https://pubchem.ncbi.nlm.nih.gov/#query={pubchem_query}",
-        },
-        {
-            "Search Target": "PubMed / literature",
-            "Purpose": "Search degradation, forced degradation, and impurity literature",
-            "Link": f"https://pubmed.ncbi.nlm.nih.gov/?term={pubmed_query}",
-        },
-        {
-            "Search Target": "General process impurity search",
-            "Purpose": "Find public process/degradation impurity discussions",
-            "Link": f"https://www.google.com/search?q={google_patent_query}",
-        },
-    ]
-
-
-def fetch_pubchem_identity(compound_name):
-    compound = compound_name.strip()
-    if not compound:
-        return "Not searched"
-
-    url = (
-        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
-        f"{quote(compound)}/property/MolecularFormula,MolecularWeight,CanonicalSMILES/JSON"
-    )
-    try:
-        with urlopen(url, timeout=4) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        props = data["PropertyTable"]["Properties"][0]
-        formula = props.get("MolecularFormula", "N/A")
-        mw = props.get("MolecularWeight", "N/A")
-        smiles = props.get("CanonicalSMILES", "N/A")
-        return f"Found: formula {formula}, MW {mw}, canonical SMILES {smiles}"
-    except Exception:
-        return "Not automatically confirmed; use PubChem link for manual verification"
-
-
-def fetch_pubchem_compound_report(compound_name):
-    compound = compound_name.strip()
-    if not compound:
-        return []
-
-    try:
-        cid_url = (
-            "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
-            f"{quote(compound)}/cids/JSON"
-        )
-        with urlopen(cid_url, timeout=4) as response:
-            cid_data = json.loads(response.read().decode("utf-8"))
-        cids = cid_data.get("IdentifierList", {}).get("CID", [])
-        if not cids:
-            return []
-
-        cid = cids[0]
-        property_url = (
-            "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/"
-            f"{cid}/property/IUPACName,MolecularFormula,MolecularWeight,CanonicalSMILES/JSON"
-        )
-        with urlopen(property_url, timeout=4) as response:
-            property_data = json.loads(response.read().decode("utf-8"))
-        props = property_data["PropertyTable"]["Properties"][0]
-
-        synonyms_url = (
-            "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/"
-            f"{cid}/synonyms/JSON"
-        )
-        synonyms = []
-        try:
-            with urlopen(synonyms_url, timeout=4) as response:
-                synonyms_data = json.loads(response.read().decode("utf-8"))
-            synonyms = synonyms_data["InformationList"]["Information"][0].get("Synonym", [])
-        except Exception:
-            synonyms = []
-
-        return [
-            {
-                "Field": "Search term",
-                "PubChem Result": compound,
-            },
-            {
-                "Field": "CID",
-                "PubChem Result": str(cid),
-            },
-            {
-                "Field": "PubChem compound page",
-                "PubChem Result": f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}",
-            },
-            {
-                "Field": "IUPAC name",
-                "PubChem Result": props.get("IUPACName", "N/A"),
-            },
-            {
-                "Field": "Molecular formula",
-                "PubChem Result": props.get("MolecularFormula", "N/A"),
-            },
-            {
-                "Field": "Molecular weight",
-                "PubChem Result": str(props.get("MolecularWeight", "N/A")),
-            },
-            {
-                "Field": "Canonical SMILES",
-                "PubChem Result": props.get("CanonicalSMILES", "N/A"),
-            },
-            {
-                "Field": "Synonyms",
-                "PubChem Result": "; ".join(synonyms[:8]) if synonyms else "N/A",
-            },
-        ]
-    except Exception:
-        return [
-            {
-                "Field": "PubChem search status",
-                "PubChem Result": "Not automatically confirmed; open PubChem link for manual review",
-            }
-        ]
-
-
-def build_reference_search_report(compound_name):
-    compound = compound_name.strip()
-    if not compound:
-        return []
-
-    pubchem_status = fetch_pubchem_identity(compound)
-    rows = []
-    for item in make_reference_search_links(compound):
-        status = "Manual verification required"
-        expected_output = "Relevant reference documents or candidate impurity names"
-        if item["Search Target"] == "PubChem":
-            status = pubchem_status
-            expected_output = "Chemical identity, synonyms, formula, molecular weight, structure"
-        elif "USP" in item["Search Target"]:
-            expected_output = "USP monograph, USP RS, related compound names, acceptance criteria if public"
-        elif "EP" in item["Search Target"] or "EDQM" in item["Search Target"]:
-            expected_output = "EP CRS / impurity reference standard candidates"
-        elif "PubMed" in item["Search Target"]:
-            expected_output = "Forced degradation, stability, degradation pathway, impurity literature"
-
-        rows.append(
-            {
-                "Search Target": item["Search Target"],
-                "Search Purpose": item["Purpose"],
-                "Expected Output": expected_output,
-                "Search Status": status,
-                "Search Link": item["Link"],
-            }
-        )
-    return rows
 
 
 st.markdown(
@@ -698,43 +460,14 @@ compound = st.text_input("Compound Name", key="compound_name")
 smiles = st.text_input("SMILES", key="smiles")
 
 reference_rows = get_impurity_references(compound)
-search_links = make_reference_search_links(compound)
-search_report_rows = build_reference_search_report(compound)
-pubchem_report_rows = fetch_pubchem_compound_report(compound)
 if compound.strip():
-    st.markdown(f"### PubChem Basic Search Result for {compound.strip()}")
-    st.caption(
-        "This section uses the public PubChem PUG REST service to retrieve the basic compound result."
-    )
-    st.table(pubchem_report_rows)
-
-    st.markdown(f"### USP/EP Impurity Verification Workspace for {compound.strip()}")
+    st.markdown(f"### Known Impurity Reference for {compound.strip()}")
     st.caption(
         "The searched compound is checked against the current demo reference library. "
-        "Rows marked as verification tasks are not confirmed impurity names. "
-        "USP/EP monographs and official reference standards should be used as the primary source."
-    )
-    st.info(
-        "Important: A row such as 'USP/EP related-substance verification required' means "
-        "the app is telling you what to verify. It is not naming an official impurity."
+        "USP/EP monographs should be used as the primary source when available. "
+        "If no verified entry is loaded, the table shows a search/verification plan."
     )
     st.table(reference_rows)
-    st.markdown("### External Reference Search Links")
-    st.caption(
-        "These links do not replace USP/EP verification. They are shortcuts to help find "
-        "official monographs, reference standards, chemical identity, and literature."
-    )
-    for item in search_links:
-        st.markdown(
-            f"- [{item['Search Target']}]({item['Link']}) - {item['Purpose']}"
-        )
-    st.markdown("### Reference Search Report")
-    st.caption(
-        "The app prepares a structured search report for the entered compound. "
-        "PubChem identity is checked automatically when network access is available; "
-        "USP/EP sources still require manual verification."
-    )
-    st.table(search_report_rows)
 else:
     st.info("Enter a compound name to check compound-specific impurity reference information.")
 
@@ -746,7 +479,14 @@ material_type = st.selectbox(
 
 purpose = st.selectbox(
     "Assessment Purpose",
-    ["Early R&D", "IND", "NDA", "ANDA", "Investor Due Diligence"],
+    [
+        "Early R&D",
+        "IND",
+        "NDA (505(b)(1) - New Drug)",
+        "NDA (505(b)(2) - Repurposed/Modified)",
+        "ANDA (Generic)",
+        "Investor Due Diligence",
+    ],
     key="purpose",
 )
 
@@ -757,7 +497,7 @@ st.caption(
     "or ICH qualification thresholds as appropriate."
 )
 st.caption(
-    "Paste one impurity per line: impurity code, trade/reference name, chemical name, origin, observed %, specification %, concern. "
+    "Paste one impurity per line: impurity code, chemical name, origin, observed %, specification %, concern. "
     "Origin examples: Degradation product, Raw material, Unreacted starting material, "
     "Process impurity, Residual solvent, Unknown impurity."
 )
@@ -765,10 +505,10 @@ st.caption(
 impurity_input = st.text_area(
     "Impurity Data",
     value=(
-        "Impurity A, USP 4-Aminophenol RS, 4-Aminophenol, Degradation product, 0.08, 0.10, Genotoxic alert not identified\n"
-        "Impurity B, Route-specific starting material RS, Route-specific starting material, Unreacted starting material, 0.16, 0.15, Requires qualification review\n"
-        "Impurity C, Supplier raw material impurity, Supplier-related raw material impurity, Raw material, 0.04, 0.05, Supplier-related carryover\n"
-        "Impurity D, Unknown related substance, Unknown related substance, Unknown impurity, 0.06, 0.05, Structure identification needed"
+        "Impurity A, 4-Aminophenol, Degradation product, 0.08, 0.10, Genotoxic alert not identified\n"
+        "Impurity B, Route-specific starting material, Unreacted starting material, 0.16, 0.15, Requires qualification review\n"
+        "Impurity C, Supplier-related raw material impurity, Raw material, 0.04, 0.05, Supplier-related carryover\n"
+        "Impurity D, Unknown related substance, Unknown impurity, 0.06, 0.05, Structure identification needed"
     ),
     height=150,
     key="impurity_input",
@@ -795,37 +535,30 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
     )
 
     st.markdown("#### Regulatory Interpretation")
-    st.write(
+    if purpose == "NDA (505(b)(2) - Repurposed/Modified)":
+        st.success(
+            """
+        **505(b)(2) Pathway Analysis:** 
+        As the API is already known, full systemic toxicity data can likely rely on the Reference Listed Drug (RLD) or literature. 
+        However, the regulatory focus must shift to strictly qualifying **new impurities, novel excipients, or degradation products** arising from your new formulation or new route of administration. 
+        Focus your efforts on ICH M7 justification for any new peaks and bridging local toxicity data.
         """
-    The current signal should be interpreted through intended use, material classification,
-    exposure level, impurity profile, and the credibility of the supporting model or NAMs evidence.
-    """
-    )
+        )
+    else:
+        st.write(
+            """
+        The current signal should be interpreted through intended use, material classification,
+        exposure level, impurity profile, and the credibility of the supporting model or NAMs evidence.
+        """
+        )
 
-    st.markdown(f"#### PubChem Basic Search Result for {compound.strip() or 'Searched Compound'}")
-    st.table(pubchem_report_rows)
-
-    st.markdown(f"#### USP/EP Impurity Verification Workspace for {compound.strip() or 'Searched Compound'}")
+    st.markdown(f"#### Known Impurity Reference for {compound.strip() or 'Searched Compound'}")
     st.table(reference_rows)
     st.warning(
-        "Rows marked as verification tasks are not confirmed impurity names. "
         "Reference information must be confirmed using USP/EP monographs first when available. "
         "DMF data, validated analytical methods, forced degradation studies, and peer-reviewed "
         "literature should support the compendial reference, not replace it."
     )
-    if search_links:
-        st.markdown("#### External Reference Search Links")
-        for item in search_links:
-            st.markdown(
-                f"- [{item['Search Target']}]({item['Link']}) - {item['Purpose']}"
-            )
-    if search_report_rows:
-        st.markdown("#### Automated Reference Search Report")
-        st.caption(
-            "This section records all reference searches prepared for the entered compound. "
-            "USP/EP results must be verified from the official source before regulatory use."
-        )
-        st.table(search_report_rows)
 
     impurity_rows = assess_impurities(impurity_input)
     if impurity_rows:
@@ -856,20 +589,31 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
     else:
         st.warning(
             "No valid impurity rows were detected. Use this format: "
-            "Impurity A, USP 4-Aminophenol RS, 4-Aminophenol, Degradation product, 0.08, 0.10, Genotoxic alert not identified"
+            "Impurity A, 4-Aminophenol, Degradation product, 0.08, 0.10, Genotoxic alert not identified"
         )
 
     st.markdown("#### Recommended Next Steps")
-    st.write(
+    if purpose == "NDA (505(b)(2) - Repurposed/Modified)":
+        st.write(
+            """
+        1. **Compare Impurity Profiles:** Map the new impurity profile against the RLD or USP/EP monograph.
+        2. **Isolate Delta:** Identify any *new* impurities or degradation products not present in the original product.
+        3. **In Silico Assessment:** Perform QSAR ICH M7 assessment specifically for the newly identified impurities.
+        4. **Exposure & Local Toxicity:** If the route of administration changed, assess local toxicity and new exposure limits.
+        5. **Bridging Strategy:** Prepare a scientific justification bridging the safety of the RLD to your new formulation.
         """
-    1. Confirm known related substances using USP/EP monographs when available
-    2. Review QSAR outputs from VEGA, OECD QSAR Toolbox, or equivalent tools
-    3. Document model applicability domain and explainability
-    4. Conduct impurity profiling and degradation product assessment
-    5. Prepare ICH M7-based justification if relevant
-    6. Consider confirmatory Ames testing if structural alerts remain unresolved
-    """
-    )
+        )
+    else:
+        st.write(
+            """
+        1. Confirm known related substances using USP/EP monographs when available
+        2. Review QSAR outputs from VEGA, OECD QSAR Toolbox, or equivalent tools
+        3. Document model applicability domain and explainability
+        4. Conduct impurity profiling and degradation product assessment
+        5. Prepare ICH M7-based justification if relevant
+        6. Consider confirmatory Ames testing if structural alerts remain unresolved
+        """
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("</div>", unsafe_allow_html=True)
