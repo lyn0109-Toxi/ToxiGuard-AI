@@ -785,106 +785,154 @@ st.markdown(
 <div class="kicker">CTD 3.2.P.8.3</div>
 <div class="big-question">Shelf-Life Prediction (ICH Q1E)</div>
 <p class="body-large">
-Enter your long-term stability data below. ToxiGuard AI will perform
-ICH Q1E linear regression with a 95% confidence interval to estimate
-when the impurity level is projected to cross your specification limit.
+Enter your long-term (25¬∞C/60%RH) and accelerated (40¬∞C/75%RH) stability data below.
+ToxiGuard AI performs ICH Q1E linear regression with 95% confidence intervals for both
+conditions and compares the degradation trends to determine shelf-life supportability.
 </p>
 """,
     unsafe_allow_html=True,
 )
 
 st.caption(
-    "This tool replicates the core statistical approach used in Minitab "
-    "stability analysis: ordinary least-squares regression with a "
-    "95% one-sided upper confidence limit. The estimated shelf life is the "
-    "time point where the upper 95% CI first exceeds the acceptance criterion."
+    "ICH Q1E approach: if accelerated data shows significant change, the shelf life "
+    "cannot be extrapolated beyond the long-term data coverage. If no significant change "
+    "at accelerated conditions, extrapolation up to 2√ó long-term coverage is supported."
 )
-
-default_stability = pd.DataFrame({
-    "Time (months)": [0, 3, 6, 9, 12, 18, 24],
-    "Impurity (%)": [0.02, 0.03, 0.04, 0.06, 0.07, 0.09, 0.11],
-})
 
 stab_spec = st.number_input(
     "Specification Limit (%) for this impurity",
     min_value=0.01, max_value=5.0, value=0.15, step=0.01, key="stab_spec"
 )
 
-stab_df = st.data_editor(
-    default_stability, num_rows="dynamic", use_container_width=True, key="stab_editor"
-)
+
+def run_regression(df_in, max_proj=60):
+    """Run OLS regression and return results dict."""
+    df_c = df_in.dropna()
+    if len(df_c) < 3:
+        return None
+    x = df_c.iloc[:, 0].values.astype(float)
+    y = df_c.iloc[:, 1].values.astype(float)
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    x_pred = np.linspace(0, max(x.max() * 2, max_proj), 300)
+    y_pred = slope * x_pred + intercept
+    n = len(x)
+    x_mean = np.mean(x)
+    se = std_err * np.sqrt(1.0 / n + (x_pred - x_mean) ** 2 / np.sum((x - x_mean) ** 2))
+    t_val = stats.t.ppf(0.95, df=n - 2)
+    y_upper = y_pred + t_val * se
+    cross = np.where(y_upper >= stab_spec)[0]
+    shelf = float(x_pred[cross[0]]) if len(cross) > 0 else None
+    return {
+        "x": x, "y": y, "x_pred": x_pred, "y_pred": y_pred, "y_upper": y_upper,
+        "slope": slope, "intercept": intercept, "r_sq": r_value ** 2,
+        "shelf_life": shelf,
+    }
+
+
+col_long, col_accel = st.columns(2)
+
+with col_long:
+    st.markdown("##### Long-Term (25¬∞C / 60% RH)")
+    lt_default = pd.DataFrame({
+        "Time (months)": [0, 3, 6, 9, 12, 18, 24],
+        "Impurity (%)": [0.02, 0.03, 0.04, 0.06, 0.07, 0.09, 0.11],
+    })
+    lt_df = st.data_editor(lt_default, num_rows="dynamic", use_container_width=True, key="lt_editor")
+
+with col_accel:
+    st.markdown("##### Accelerated (40¬∞C / 75% RH)")
+    ac_default = pd.DataFrame({
+        "Time (months)": [0, 1, 2, 3, 6],
+        "Impurity (%)": [0.02, 0.04, 0.07, 0.11, 0.18],
+    })
+    ac_df = st.data_editor(ac_default, num_rows="dynamic", use_container_width=True, key="ac_editor")
 
 if st.button("Run Shelf-Life Prediction", key="run_stability"):
-    stab_clean = stab_df.dropna()
-    if len(stab_clean) < 3:
-        st.error("At least 3 data points are required for regression.")
+    lt_res = run_regression(lt_df, max_proj=60)
+    ac_res = run_regression(ac_df, max_proj=12)
+
+    if lt_res is None:
+        st.error("Long-term data requires at least 3 data points.")
     else:
-        x = stab_clean["Time (months)"].values.astype(float)
-        y = stab_clean["Impurity (%)"].values.astype(float)
+        # KPI row
+        lt_sl_text = f"{lt_res['shelf_life']:.1f} mo" if lt_res['shelf_life'] else "> 60 mo"
+        ac_sl_text = f"{ac_res['shelf_life']:.1f} mo" if ac_res and ac_res['shelf_life'] else ("N/A" if ac_res is None else "> 12 mo")
+        ac_slope_text = f"{ac_res['slope']:.5f}" if ac_res else "N/A"
 
-        slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
-        r_sq = r_value ** 2
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Long-Term Shelf Life", lt_sl_text)
+        c2.metric("Long-Term R¬≤", f"{lt_res['r_sq']:.4f}")
+        c3.metric("Accelerated Slope (%/mo)", ac_slope_text)
+        c4.metric("Accel. vs Long-Term Rate", f"{(ac_res['slope'] / lt_res['slope']):.1f}√ó" if ac_res and lt_res['slope'] != 0 else "N/A")
 
-        x_pred = np.linspace(0, max(x.max() * 2, 60), 300)
-        y_pred = slope * x_pred + intercept
+        # Charts side by side
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            st.markdown("#### Long-Term (25¬∞C / 60% RH)")
+            fig_lt = go.Figure()
+            fig_lt.add_trace(go.Scatter(x=lt_res["x"], y=lt_res["y"], mode="markers", name="Observed", marker=dict(size=9, color="#0070c0")))
+            fig_lt.add_trace(go.Scatter(x=lt_res["x_pred"], y=lt_res["y_pred"], mode="lines", name="Regression", line=dict(color="#002060")))
+            fig_lt.add_trace(go.Scatter(x=lt_res["x_pred"], y=lt_res["y_upper"], mode="lines", name="95% UCI", line=dict(color="#f57c00", dash="dash")))
+            fig_lt.add_hline(y=stab_spec, line_dash="dash", line_color="red", annotation_text=f"Spec ({stab_spec}%)")
+            if lt_res["shelf_life"]:
+                fig_lt.add_vline(x=lt_res["shelf_life"], line_dash="dot", line_color="green", annotation_text=f"{lt_res['shelf_life']:.1f}mo")
+            fig_lt.update_layout(xaxis_title="Time (months)", yaxis_title="Impurity (%)", height=380, margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", y=-0.25))
+            st.plotly_chart(fig_lt, use_container_width=True)
 
-        n = len(x)
-        x_mean = np.mean(x)
-        se_pred = std_err * np.sqrt(1.0 / n + (x_pred - x_mean) ** 2 / np.sum((x - x_mean) ** 2))
-        t_val = stats.t.ppf(0.95, df=n - 2)
-        y_upper = y_pred + t_val * se_pred
+        with ch2:
+            st.markdown("#### Accelerated (40¬∞C / 75% RH)")
+            if ac_res:
+                fig_ac = go.Figure()
+                fig_ac.add_trace(go.Scatter(x=ac_res["x"], y=ac_res["y"], mode="markers", name="Observed", marker=dict(size=9, color="#bb3e33")))
+                fig_ac.add_trace(go.Scatter(x=ac_res["x_pred"], y=ac_res["y_pred"], mode="lines", name="Regression", line=dict(color="#8b0000")))
+                fig_ac.add_trace(go.Scatter(x=ac_res["x_pred"], y=ac_res["y_upper"], mode="lines", name="95% UCI", line=dict(color="#f57c00", dash="dash")))
+                fig_ac.add_hline(y=stab_spec, line_dash="dash", line_color="red", annotation_text=f"Spec ({stab_spec}%)")
+                if ac_res["shelf_life"]:
+                    fig_ac.add_vline(x=ac_res["shelf_life"], line_dash="dot", line_color="green", annotation_text=f"{ac_res['shelf_life']:.1f}mo")
+                fig_ac.update_layout(xaxis_title="Time (months)", yaxis_title="Impurity (%)", height=380, margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", y=-0.25))
+                st.plotly_chart(fig_ac, use_container_width=True)
+            else:
+                st.info("Accelerated data insufficient for regression (need ‚â• 3 points).")
 
-        cross_idx = np.where(y_upper >= stab_spec)[0]
-        if len(cross_idx) > 0:
-            shelf_life = x_pred[cross_idx[0]]
-            shelf_life_text = f"{shelf_life:.1f} months"
-        else:
-            shelf_life = None
-            shelf_life_text = f"> {x_pred[-1]:.0f} months (does not cross within prediction range)"
+        # Regulatory interpretation
+        st.markdown("#### Regulatory Interpretation (ICH Q1E)")
+        sig_change = False
+        if ac_res and ac_res["slope"] > 0 and lt_res["slope"] > 0:
+            rate_ratio = ac_res["slope"] / lt_res["slope"]
+            if rate_ratio > 3.0 or (ac_res["shelf_life"] is not None and ac_res["shelf_life"] < 6):
+                sig_change = True
 
-        col_s1, col_s2, col_s3 = st.columns(3)
-        col_s1.metric("Estimated Shelf Life", shelf_life_text)
-        col_s2.metric("R¬≤", f"{r_sq:.4f}")
-        col_s3.metric("Slope (% / month)", f"{slope:.5f}")
-
-        fig_stab = go.Figure()
-        fig_stab.add_trace(go.Scatter(x=x, y=y, mode="markers", name="Observed Data", marker=dict(size=10, color="#0070c0")))
-        fig_stab.add_trace(go.Scatter(x=x_pred, y=y_pred, mode="lines", name="Regression Line", line=dict(color="#002060")))
-        fig_stab.add_trace(go.Scatter(x=x_pred, y=y_upper, mode="lines", name="95% Upper CI", line=dict(color="#f57c00", dash="dash")))
-        fig_stab.add_hline(y=stab_spec, line_dash="dash", line_color="red", annotation_text=f"Spec Limit ({stab_spec}%)")
-        if shelf_life is not None:
-            fig_stab.add_vline(x=shelf_life, line_dash="dot", line_color="green", annotation_text=f"Shelf Life: {shelf_life:.1f}mo")
-        fig_stab.update_layout(
-            xaxis_title="Time (months)", yaxis_title="Impurity (%)",
-            margin=dict(l=20, r=20, t=40, b=20), height=420,
-            legend=dict(orientation="h", y=-0.2)
-        )
-        st.plotly_chart(fig_stab, use_container_width=True)
-
-        st.markdown("#### Regulatory Interpretation (CTD 3.2.P.8.3)")
-        if shelf_life is not None and shelf_life >= 24:
-            st.success(
-                f"Based on ICH Q1E linear regression, the 95% upper confidence limit "
-                f"crosses the specification ({stab_spec}%) at **{shelf_life:.1f} months**. "
-                f"A shelf life of **24 months** is supported by the current data."
-            )
-        elif shelf_life is not None and shelf_life >= 12:
-            st.warning(
-                f"The 95% upper confidence limit crosses the specification ({stab_spec}%) "
-                f"at **{shelf_life:.1f} months**. A shelf life of **{int(shelf_life // 6) * 6} months** "
-                f"may be supportable. Consider additional long-term data to extend."
-            )
-        elif shelf_life is not None:
+        if sig_change:
             st.error(
-                f"The 95% upper confidence limit crosses the specification ({stab_spec}%) "
-                f"at only **{shelf_life:.1f} months**. The current data does not support "
-                f"a commercially viable shelf life. Process or formulation optimization is recommended."
+                f"**Significant change detected at accelerated conditions.** "
+                f"The degradation rate at 40¬∞C/75%RH is **{rate_ratio:.1f}√ó faster** than long-term. "
+                f"Per ICH Q1E, the proposed shelf life **cannot be extrapolated** beyond the "
+                f"available long-term data coverage ({lt_res['x'].max():.0f} months). "
+                f"Additional long-term data is required to support shelf-life extension."
             )
         else:
-            st.success(
-                f"The impurity trend remains well below the specification ({stab_spec}%) "
-                f"throughout the projected range. A shelf life of 24+ months is likely supportable."
-            )
+            if lt_res["shelf_life"] and lt_res["shelf_life"] >= 24:
+                st.success(
+                    f"No significant change at accelerated conditions. "
+                    f"Long-term 95% UCI crosses the specification at **{lt_res['shelf_life']:.1f} months**. "
+                    f"Per ICH Q1E, a shelf life of **24 months** is supported."
+                )
+            elif lt_res["shelf_life"] and lt_res["shelf_life"] >= 12:
+                st.warning(
+                    f"No significant change at accelerated conditions. "
+                    f"Long-term 95% UCI crosses at **{lt_res['shelf_life']:.1f} months**. "
+                    f"A shelf life of **{int(lt_res['shelf_life'] // 6) * 6} months** may be supportable."
+                )
+            elif lt_res["shelf_life"]:
+                st.error(
+                    f"Long-term 95% UCI crosses the specification at only "
+                    f"**{lt_res['shelf_life']:.1f} months**. Process optimization is recommended."
+                )
+            else:
+                st.success(
+                    f"The impurity trend remains well below the specification ({stab_spec}%) "
+                    f"throughout the projected range. A shelf life of 24+ months is likely supportable."
+                )
 
 st.markdown("## Request a Consultation")
 name = st.text_input("Name", key="contact_name")
