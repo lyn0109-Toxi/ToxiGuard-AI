@@ -4,8 +4,10 @@ import io
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from scipy import stats
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -534,7 +536,7 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
 
     impurity_rows = assess_impurities(edited_df)
 
-    # 1. KPI Metrics — driven by actual input data
+    # 1. KPI Metrics ‚Äî driven by actual input data
     total_count = len(impurity_rows) if impurity_rows else 0
     above_spec_count = len([r for r in impurity_rows if r['Status'] == 'Above specification'])
     within_spec_count = len([r for r in impurity_rows if r['Status'] == 'Within specification'])
@@ -543,12 +545,12 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Impurities Entered", str(total_count))
     col2.metric("Within Specification", str(within_spec_count), None, delta_color="normal")
-    col3.metric("Above Specification ⚠️", str(above_spec_count), f"+{above_spec_count}" if above_spec_count > 0 else None, delta_color="inverse")
+    col3.metric("Above Specification ‚ö†Ô∏è", str(above_spec_count), f"+{above_spec_count}" if above_spec_count > 0 else None, delta_color="inverse")
     col4.metric("Review Needed", str(review_count))
 
     st.markdown("---")
 
-    # 2. Charts — all driven by user input
+    # 2. Charts ‚Äî all driven by user input
     if impurity_rows:
         col_chart1, col_chart2 = st.columns(2)
 
@@ -739,7 +741,7 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
         doc.build(pdf_elements)
         st.markdown("---")
         st.download_button(
-            label="📄 Export CTD 3.2.P.5.5 Narrative (PDF)",
+            label="üìÑ Export CTD 3.2.P.5.5 Narrative (PDF)",
             data=pdf_buffer.getvalue(),
             file_name="CTD_3_2_P_5_5_Narrative.pdf",
             mime="application/pdf"
@@ -775,6 +777,114 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
+# ‚îÄ‚îÄ‚îÄ CTD 3.2.P.8 Stability / Shelf-Life Prediction (ICH Q1E) ‚îÄ‚îÄ‚îÄ
+st.markdown("---")
+st.markdown(
+    """
+<div class="kicker">CTD 3.2.P.8.3</div>
+<div class="big-question">Shelf-Life Prediction (ICH Q1E)</div>
+<p class="body-large">
+Enter your long-term stability data below. ToxiGuard AI will perform
+ICH Q1E linear regression with a 95% confidence interval to estimate
+when the impurity level is projected to cross your specification limit.
+</p>
+""",
+    unsafe_allow_html=True,
+)
+
+st.caption(
+    "This tool replicates the core statistical approach used in Minitab "
+    "stability analysis: ordinary least-squares regression with a "
+    "95% one-sided upper confidence limit. The estimated shelf life is the "
+    "time point where the upper 95% CI first exceeds the acceptance criterion."
+)
+
+default_stability = pd.DataFrame({
+    "Time (months)": [0, 3, 6, 9, 12, 18, 24],
+    "Impurity (%)": [0.02, 0.03, 0.04, 0.06, 0.07, 0.09, 0.11],
+})
+
+stab_spec = st.number_input(
+    "Specification Limit (%) for this impurity",
+    min_value=0.01, max_value=5.0, value=0.15, step=0.01, key="stab_spec"
+)
+
+stab_df = st.data_editor(
+    default_stability, num_rows="dynamic", use_container_width=True, key="stab_editor"
+)
+
+if st.button("Run Shelf-Life Prediction", key="run_stability"):
+    stab_clean = stab_df.dropna()
+    if len(stab_clean) < 3:
+        st.error("At least 3 data points are required for regression.")
+    else:
+        x = stab_clean["Time (months)"].values.astype(float)
+        y = stab_clean["Impurity (%)"].values.astype(float)
+
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+        r_sq = r_value ** 2
+
+        x_pred = np.linspace(0, max(x.max() * 2, 60), 300)
+        y_pred = slope * x_pred + intercept
+
+        n = len(x)
+        x_mean = np.mean(x)
+        se_pred = std_err * np.sqrt(1.0 / n + (x_pred - x_mean) ** 2 / np.sum((x - x_mean) ** 2))
+        t_val = stats.t.ppf(0.95, df=n - 2)
+        y_upper = y_pred + t_val * se_pred
+
+        cross_idx = np.where(y_upper >= stab_spec)[0]
+        if len(cross_idx) > 0:
+            shelf_life = x_pred[cross_idx[0]]
+            shelf_life_text = f"{shelf_life:.1f} months"
+        else:
+            shelf_life = None
+            shelf_life_text = f"> {x_pred[-1]:.0f} months (does not cross within prediction range)"
+
+        col_s1, col_s2, col_s3 = st.columns(3)
+        col_s1.metric("Estimated Shelf Life", shelf_life_text)
+        col_s2.metric("R¬≤", f"{r_sq:.4f}")
+        col_s3.metric("Slope (% / month)", f"{slope:.5f}")
+
+        fig_stab = go.Figure()
+        fig_stab.add_trace(go.Scatter(x=x, y=y, mode="markers", name="Observed Data", marker=dict(size=10, color="#0070c0")))
+        fig_stab.add_trace(go.Scatter(x=x_pred, y=y_pred, mode="lines", name="Regression Line", line=dict(color="#002060")))
+        fig_stab.add_trace(go.Scatter(x=x_pred, y=y_upper, mode="lines", name="95% Upper CI", line=dict(color="#f57c00", dash="dash")))
+        fig_stab.add_hline(y=stab_spec, line_dash="dash", line_color="red", annotation_text=f"Spec Limit ({stab_spec}%)")
+        if shelf_life is not None:
+            fig_stab.add_vline(x=shelf_life, line_dash="dot", line_color="green", annotation_text=f"Shelf Life: {shelf_life:.1f}mo")
+        fig_stab.update_layout(
+            xaxis_title="Time (months)", yaxis_title="Impurity (%)",
+            margin=dict(l=20, r=20, t=40, b=20), height=420,
+            legend=dict(orientation="h", y=-0.2)
+        )
+        st.plotly_chart(fig_stab, use_container_width=True)
+
+        st.markdown("#### Regulatory Interpretation (CTD 3.2.P.8.3)")
+        if shelf_life is not None and shelf_life >= 24:
+            st.success(
+                f"Based on ICH Q1E linear regression, the 95% upper confidence limit "
+                f"crosses the specification ({stab_spec}%) at **{shelf_life:.1f} months**. "
+                f"A shelf life of **24 months** is supported by the current data."
+            )
+        elif shelf_life is not None and shelf_life >= 12:
+            st.warning(
+                f"The 95% upper confidence limit crosses the specification ({stab_spec}%) "
+                f"at **{shelf_life:.1f} months**. A shelf life of **{int(shelf_life // 6) * 6} months** "
+                f"may be supportable. Consider additional long-term data to extend."
+            )
+        elif shelf_life is not None:
+            st.error(
+                f"The 95% upper confidence limit crosses the specification ({stab_spec}%) "
+                f"at only **{shelf_life:.1f} months**. The current data does not support "
+                f"a commercially viable shelf life. Process or formulation optimization is recommended."
+            )
+        else:
+            st.success(
+                f"The impurity trend remains well below the specification ({stab_spec}%) "
+                f"throughout the projected range. A shelf life of 24+ months is likely supportable."
+            )
 
 st.markdown("## Request a Consultation")
 name = st.text_input("Name", key="contact_name")
