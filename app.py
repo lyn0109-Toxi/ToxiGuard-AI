@@ -534,42 +534,84 @@ if st.button("Run Preliminary Assessment", key="run_assessment"):
 
     impurity_rows = assess_impurities(edited_df)
 
-    # 1. KPI Metrics Dashboard
+    # 1. KPI Metrics — driven by actual input data
+    total_count = len(impurity_rows) if impurity_rows else 0
+    above_spec_count = len([r for r in impurity_rows if r['Status'] == 'Above specification'])
+    within_spec_count = len([r for r in impurity_rows if r['Status'] == 'Within specification'])
+    review_count = len([r for r in impurity_rows if r['Status'] == 'Review needed'])
+
     col1, col2, col3, col4 = st.columns(4)
-    above_spec_count = len([r for r in impurity_rows if r['Status'] == 'Above specification']) if impurity_rows else 0
-    col1.metric("Total Compounds Monitored", "285", "+3%")
-    col2.metric("High-Risk Impurities", str(above_spec_count), f"+{above_spec_count}" if above_spec_count > 0 else None)
-    col3.metric("Genotoxicity Flags", "0", "-1")
-    col4.metric("FDA Submissions", "4 Active", None)
+    col1.metric("Total Impurities Entered", str(total_count))
+    col2.metric("Within Specification", str(within_spec_count), None, delta_color="normal")
+    col3.metric("Above Specification ⚠️", str(above_spec_count), f"+{above_spec_count}" if above_spec_count > 0 else None, delta_color="inverse")
+    col4.metric("Review Needed", str(review_count))
 
     st.markdown("---")
 
-    # 2. Charts
+    # 2. Charts — all driven by user input
     if impurity_rows:
         col_chart1, col_chart2 = st.columns(2)
+
         with col_chart1:
-            st.markdown("#### Impurity Levels by Compound")
-            df_chart = pd.DataFrame({
-                "Impurity": [r["Impurity Code"] for r in impurity_rows],
-                "Observed": [float(r["Observed (%)"]) if r["Observed (%)"] else 0.0 for r in impurity_rows],
-                "Threshold": [float(r["Specification (%)"]) if r["Specification (%)"] else 0.0 for r in impurity_rows]
-            })
+            st.markdown("#### Observed vs. Specification (ICH Q3A/B Threshold)")
+            obs_vals = []
+            spec_vals = []
+            labels = []
+            for r in impurity_rows:
+                try:
+                    obs_vals.append(float(r["Observed (%)"]))
+                    spec_vals.append(float(r["Specification (%)"]))
+                    labels.append(r["Impurity Code"])
+                except (ValueError, TypeError):
+                    continue
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=df_chart["Impurity"], y=df_chart["Observed"], name="Observed (%)", marker_color="#0070c0"))
-            fig.add_trace(go.Scatter(x=df_chart["Impurity"], y=df_chart["Threshold"], name="Specification Limit", mode="lines+markers", line=dict(color="#bb3e33", dash="dash")))
-            fig.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=300)
+            fig.add_trace(go.Bar(x=labels, y=obs_vals, name="Observed (%)", marker_color="#0070c0"))
+            fig.add_trace(go.Scatter(x=labels, y=spec_vals, name="Specification Limit", mode="lines+markers", line=dict(color="#bb3e33", dash="dash", width=2)))
+            # ICH Q3A identification threshold for API
+            if material_type == "API":
+                fig.add_hline(y=0.10, line_dash="dot", line_color="orange", annotation_text="ICH Q3A ID Threshold (0.10%)")
+                fig.add_hline(y=0.15, line_dash="dot", line_color="red", annotation_text="ICH Q3A Qual. Threshold (0.15%)")
+            fig.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=340, legend=dict(orientation="h", y=-0.2))
             st.plotly_chart(fig, use_container_width=True)
 
         with col_chart2:
-            st.markdown("#### Predicted Genotoxicity Risk Trend")
-            months = ["Month 1", "Month 2", "Month 3", "Month 4", "Month 5", "Month 6"]
-            mock_risk = [0.1, 0.2, 0.35, 0.6, 0.5, 0.45]
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=months, y=mock_risk, mode="lines+markers", name="Compound Trend", line=dict(color="#002060")))
-            fig2.add_hline(y=0.7, line_dash="dash", line_color="red", annotation_text="High Risk")
-            fig2.add_hline(y=0.4, line_dash="dash", line_color="green", annotation_text="Low Risk")
-            fig2.update_layout(yaxis_range=[0, 1.0], margin=dict(l=20, r=20, t=30, b=20), height=300)
-            st.plotly_chart(fig2, use_container_width=True)
+            st.markdown("#### Margin of Safety (Observed / Specification)")
+            margin_data = []
+            for r in impurity_rows:
+                try:
+                    obs = float(r["Observed (%)"])
+                    spec = float(r["Specification (%)"])
+                    pct = round((obs / spec) * 100, 1) if spec > 0 else 0
+                    margin_data.append({"Impurity": r["Impurity Code"], "Usage (%)": pct})
+                except (ValueError, TypeError):
+                    continue
+            if margin_data:
+                df_margin = pd.DataFrame(margin_data)
+                colors = ["#b71c1c" if v > 100 else "#f57c00" if v > 80 else "#1b5e20" for v in df_margin["Usage (%)"]]
+                fig2 = go.Figure(go.Bar(x=df_margin["Impurity"], y=df_margin["Usage (%)"], marker_color=colors, text=[f"{v}%" for v in df_margin["Usage (%)"]], textposition="outside"))
+                fig2.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="Specification Limit (100%)")
+                fig2.add_hline(y=80, line_dash="dot", line_color="orange", annotation_text="Warning Zone (80%)")
+                fig2.update_layout(yaxis_title="% of Specification Used", margin=dict(l=20, r=20, t=30, b=20), height=340)
+                st.plotly_chart(fig2, use_container_width=True)
+
+        # Row 2: Origin distribution + Status summary
+        col_chart3, col_chart4 = st.columns(2)
+        with col_chart3:
+            st.markdown("#### Impurity Origin Distribution")
+            origin_counts = {}
+            for r in impurity_rows:
+                o = r["Origin"]
+                origin_counts[o] = origin_counts.get(o, 0) + 1
+            fig3 = go.Figure(go.Pie(labels=list(origin_counts.keys()), values=list(origin_counts.values()), hole=0.45, marker=dict(colors=["#0070c0", "#bb3e33", "#f0ad4e", "#5cb85c", "#6c757d"])))
+            fig3.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=300)
+            st.plotly_chart(fig3, use_container_width=True)
+
+        with col_chart4:
+            st.markdown("#### Compliance Status Summary")
+            status_map = {"Within specification": within_spec_count, "Above specification": above_spec_count, "Review needed": review_count}
+            fig4 = go.Figure(go.Bar(x=list(status_map.keys()), y=list(status_map.values()), marker_color=["#1b5e20", "#b71c1c", "#f57c00"], text=list(status_map.values()), textposition="outside"))
+            fig4.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=300, yaxis_title="Count")
+            st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("---")
 
