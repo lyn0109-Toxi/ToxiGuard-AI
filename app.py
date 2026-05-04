@@ -31,7 +31,7 @@ def to_float(value):
         return None
 
 
-def assess_impurities(raw_text):
+def assess_impurities(df):
     origin_actions = {
         "degradation product": "Link to forced degradation pathway and stability-indicating method.",
         "raw material": "Check supplier qualification, raw material specification, and carryover control.",
@@ -42,18 +42,33 @@ def assess_impurities(raw_text):
     }
 
     rows = []
-    for line in raw_text.splitlines():
-        if not line.strip() or line.lower().startswith("name,"):
+    if df is None or df.empty:
+        return rows
+
+    for index, row in df.iterrows():
+        code = str(row.get("Impurity Code", "")).strip()
+        chemical_name = str(row.get("Chemical Name", "")).strip()
+        origin = str(row.get("Origin", "")).strip()
+        observed_val = row.get("Observed (%)", None)
+        limit_val = row.get("Specification (%)", None)
+        concern = str(row.get("Concern", "")).strip()
+
+        if not code or pd.isna(code) or code == "nan":
             continue
 
-        parts = [part.strip() for part in line.split(",")]
-        if len(parts) < 5:
-            continue
+        try:
+            observed = float(observed_val) if not pd.isna(observed_val) else None
+        except ValueError:
+            observed = None
 
-        code, chemical_name, origin, observed_text, limit_text = parts[:5]
-        concern = parts[5] if len(parts) > 5 else "Not specified"
-        observed = to_float(observed_text)
-        limit = to_float(limit_text)
+        try:
+            limit = float(limit_val) if not pd.isna(limit_val) else None
+        except ValueError:
+            limit = None
+
+        observed_text = f"{observed:.3g}" if observed is not None else ""
+        limit_text = f"{limit:.3g}" if limit is not None else ""
+
         origin_note = origin_actions.get(
             origin.lower(),
             "Clarify impurity origin and link the control strategy to the manufacturing process.",
@@ -497,35 +512,27 @@ purpose = st.selectbox(
     key="purpose",
 )
 
-st.markdown("### Related Substance / Impurity Specification Comparison")
+st.markdown("### Related Substance / Impurity Specification Input")
 st.caption(
-    "Example limits below are proposed internal specifications for demo purposes. "
-    "Replace them with approved release/stability specifications, USP/EP monograph limits, "
-    "or ICH qualification thresholds as appropriate."
-)
-st.caption(
-    "Paste one impurity per line: impurity code, chemical name, origin, observed %, specification %, concern. "
-    "Origin examples: Degradation product, Raw material, Unreacted starting material, "
-    "Process impurity, Residual solvent, Unknown impurity."
+    "Directly edit the table below to input your analytical lab results ('Observed (%)') "
+    "and compare them against your proposed or compendial 'Specification (%)'. "
+    "You can add or remove rows directly from the table."
 )
 
-impurity_input = st.text_area(
-    "Impurity Data",
-    value=(
-        "Impurity A, 4-Aminophenol, Degradation product, 0.08, 0.10, Genotoxic alert not identified\n"
-        "Impurity B, Route-specific starting material, Unreacted starting material, 0.16, 0.15, Requires qualification review\n"
-        "Impurity C, Supplier-related raw material impurity, Raw material, 0.04, 0.05, Supplier-related carryover\n"
-        "Impurity D, Unknown related substance, Unknown impurity, 0.06, 0.05, Structure identification needed"
-    ),
-    height=150,
-    key="impurity_input",
-)
+default_impurities = pd.DataFrame([
+    {"Impurity Code": "Impurity A", "Chemical Name": "4-Aminophenol", "Origin": "Degradation product", "Observed (%)": 0.08, "Specification (%)": 0.10, "Concern": "Genotoxic alert not identified"},
+    {"Impurity Code": "Impurity B", "Chemical Name": "Route-specific starting material", "Origin": "Unreacted starting material", "Observed (%)": 0.16, "Specification (%)": 0.15, "Concern": "Requires qualification review"},
+    {"Impurity Code": "Impurity C", "Chemical Name": "Supplier-related raw material impurity", "Origin": "Raw material", "Observed (%)": 0.04, "Specification (%)": 0.05, "Concern": "Supplier-related carryover"},
+    {"Impurity Code": "Impurity D", "Chemical Name": "Unknown related substance", "Origin": "Unknown impurity", "Observed (%)": 0.06, "Specification (%)": 0.05, "Concern": "Structure identification needed"}
+])
+
+edited_df = st.data_editor(default_impurities, num_rows="dynamic", use_container_width=True, key="impurity_editor")
 
 if st.button("Run Preliminary Assessment", key="run_assessment"):
     st.markdown('<div class="report">', unsafe_allow_html=True)
     st.markdown("### Preliminary Regulatory Toxicology Report")
 
-    impurity_rows = assess_impurities(impurity_input)
+    impurity_rows = assess_impurities(edited_df)
 
     # 1. KPI Metrics Dashboard
     col1, col2, col3, col4 = st.columns(4)
